@@ -1,0 +1,535 @@
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Jenkins Failure Agent</title>
+
+    <style>
+        * { box-sizing: border-box; }
+
+        body {
+            margin: 0;
+            padding: 32px;
+            font-family: Arial, sans-serif;
+            background: #f4f6f9;
+            color: #172033;
+        }
+
+        .container { max-width: 1100px; margin: auto; }
+        h1 { margin-bottom: 8px; }
+        h2 { margin-top: 0; }
+        .subtitle { color: #64748b; margin-bottom: 28px; }
+
+        .toolbar, .failure-header, .actions {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            gap: 12px;
+            flex-wrap: wrap;
+        }
+
+        .summary {
+            display: grid;
+            grid-template-columns: repeat(3, minmax(0, 1fr));
+            gap: 16px;
+            margin-bottom: 24px;
+        }
+
+        .summary-card, .panel, .failure-card {
+            background: white;
+            padding: 20px;
+            border-radius: 12px;
+            border: 1px solid #e2e8f0;
+            box-shadow: 0 2px 8px #00000008;
+        }
+
+        .summary-card strong {
+            display: block;
+            font-size: 28px;
+            margin-top: 8px;
+        }
+
+        .section { margin: 28px 0; }
+        .failure-card { margin-bottom: 14px; }
+        .failure-header { align-items: flex-start; }
+        .failure-header h3 { margin: 0; overflow-wrap: anywhere; }
+        .details { color: #64748b; font-size: 14px; margin: 12px 0; }
+
+        .badge {
+            display: inline-block;
+            padding: 6px 10px;
+            border-radius: 20px;
+            font-size: 12px;
+            font-weight: bold;
+            background: #e2e8f0;
+            color: #334155;
+        }
+
+        .badge-danger { background: #fee2e2; color: #b91c1c; }
+        .badge-success { background: #dcfce7; color: #166534; }
+        .badge-warning { background: #fef3c7; color: #92400e; }
+        .badge-info { background: #dbeafe; color: #1d4ed8; }
+
+        .error-box {
+            background: #f8fafc;
+            border-left: 3px solid #ef4444;
+            padding: 12px;
+            font-family: monospace;
+            font-size: 13px;
+            overflow-wrap: anywhere;
+            white-space: pre-wrap;
+        }
+
+        button {
+            border: none;
+            border-radius: 7px;
+            padding: 10px 15px;
+            cursor: pointer;
+            font-weight: 600;
+        }
+
+        button:hover { opacity: 0.85; }
+        button:disabled { opacity: 0.5; cursor: wait; }
+        .primary { background: #2563eb; color: white; }
+        .secondary { background: #e2e8f0; color: #334155; }
+
+        input {
+            width: 100%;
+            padding: 12px;
+            border: 1px solid #cbd5e1;
+            border-radius: 7px;
+            font-size: 14px;
+            margin: 8px 0 12px;
+        }
+
+        .muted { color: #64748b; }
+        .message { margin: 12px 0; font-size: 14px; }
+        .message-error { color: #b91c1c; }
+        .message-success { color: #15803d; }
+        .diagnosis-grid {
+            display: grid;
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+            gap: 16px;
+        }
+
+        .diagnosis-block {
+            background: #f8fafc;
+            padding: 16px;
+            border-radius: 8px;
+            overflow-wrap: anywhere;
+        }
+
+        .diagnosis-block h3 { margin-top: 0; font-size: 15px; }
+        .diagnosis-block p { line-height: 1.6; }
+        .evidence-list { padding-left: 20px; line-height: 1.6; }
+        .build-link { color: #2563eb; text-decoration: none; }
+        .build-link:hover { text-decoration: underline; }
+
+        @media (max-width: 650px) {
+            body { padding: 16px; }
+            .summary, .diagnosis-grid { grid-template-columns: 1fr; }
+        }
+    </style>
+</head>
+
+<body>
+<main class="container">
+    <header>
+        <h1>Jenkins Failure Agent</h1>
+        <p class="subtitle">
+            Monitor failed builds and review AI-generated failure analysis.
+        </p>
+    </header>
+
+    <section class="summary">
+        <div class="summary-card">
+            Total failures
+            <strong id="totalCount">—</strong>
+        </div>
+        <div class="summary-card">
+            Pending analysis
+            <strong id="pendingCount">—</strong>
+        </div>
+        <div class="summary-card">
+            High / critical
+            <strong id="highCount">—</strong>
+        </div>
+    </section>
+
+    <section class="section">
+        <div class="toolbar">
+            <h2>Failed Builds</h2>
+            <button id="refreshButton" class="secondary" type="button">
+                Refresh builds
+            </button>
+        </div>
+        <p id="listMessage" class="message muted">Loading builds...</p>
+        <div id="failureList"></div>
+    </section>
+
+    <section id="analysis-detail" class="panel section">
+        <h2>Build Failure Diagnosis</h2>
+        <p class="muted">
+            Select a build below or enter its event key, for example
+            <code>frontend-ci:51</code>.
+        </p>
+
+        <form id="analysis-form">
+            <label for="event-key">Event key</label>
+            <input
+                id="event-key"
+                type="text"
+                placeholder="frontend-ci:51"
+                required
+            />
+            <button id="viewButton" class="primary" type="submit">
+                View analysis
+            </button>
+        </form>
+
+        <p id="analysis-message" class="message" role="status"></p>
+
+        <div id="analysis-result" hidden>
+            <div class="toolbar">
+                <h3 id="detail-title">Build details</h3>
+                <span id="analysis-status" class="badge"></span>
+            </div>
+
+            <p class="details">
+                Build:
+                <a id="build-url" class="build-link"
+                   target="_blank" rel="noopener noreferrer"></a>
+                <br />
+                Repository: <strong id="repository"></strong>
+                <br />
+                PR: <strong id="pr-number"></strong>
+                <br />
+                Event received: <strong id="created-at"></strong>
+            </p>
+
+            <div id="diagnosis-content" class="diagnosis-grid">
+                <div class="diagnosis-block">
+                    <h3>Severity</h3>
+                    <p id="severity">—</p>
+                </div>
+                <div class="diagnosis-block">
+                    <h3>Confidence</h3>
+                    <p id="confidence">—</p>
+                </div>
+                <div class="diagnosis-block">
+                    <h3>Root cause</h3>
+                    <p id="root-cause">—</p>
+                </div>
+                <div class="diagnosis-block">
+                    <h3>Recommended fix</h3>
+                    <p id="recommended-fix">—</p>
+                </div>
+                <div class="diagnosis-block" style="grid-column: 1 / -1">
+                    <h3>Evidence from logs</h3>
+                    <ul id="evidence" class="evidence-list"></ul>
+                </div>
+            </div>
+
+            <div id="analysis-error-box" hidden>
+                <h3>Processing error</h3>
+                <p id="analysis-error" class="error-box"></p>
+            </div>
+        </div>
+    </section>
+</main>
+
+<script>
+    const form = document.getElementById("analysis-form");
+    const eventKeyInput = document.getElementById("event-key");
+    const message = document.getElementById("analysis-message");
+    const result = document.getElementById("analysis-result");
+    const listMessage = document.getElementById("listMessage");
+    const failureList = document.getElementById("failureList");
+    const refreshButton = document.getElementById("refreshButton");
+    const viewButton = document.getElementById("viewButton");
+
+    let builds = [];
+
+    function setMessage(element, text, type = "muted") {
+        element.textContent = text;
+        element.className = "message " +
+            (type === "error" ? "message-error" :
+             type === "success" ? "message-success" : "muted");
+    }
+
+    function badgeClass(status) {
+        if (status === "COMPLETED" || status === "SUCCESS") {
+            return "badge badge-success";
+        }
+        if (status === "FAILED" || status === "CRITICAL" ||
+            status === "HIGH" || status === "FAILURE") {
+            return "badge badge-danger";
+        }
+        if (status === "PROCESSING" || status === "RECEIVED" ||
+            status === "MEDIUM") {
+            return "badge badge-warning";
+        }
+        return "badge badge-info";
+    }
+
+    function addTextElement(parent, tag, text, className = "") {
+        const element = document.createElement(tag);
+        element.textContent = text ?? "—";
+        if (className) element.className = className;
+        parent.appendChild(element);
+        return element;
+    }
+
+    function updateSummary(items) {
+        document.getElementById("totalCount").textContent = items.length;
+
+        document.getElementById("pendingCount").textContent =
+            items.filter(item =>
+                ["RECEIVED", "PROCESSING"].includes(item.analysis_status)
+            ).length;
+
+        document.getElementById("highCount").textContent =
+            items.filter(item => {
+                let analysis = item.analysis_result;
+                if (typeof analysis === "string") {
+                    try { analysis = JSON.parse(analysis); }
+                    catch { analysis = null; }
+                }
+                return analysis &&
+                    ["HIGH", "CRITICAL"].includes(analysis.severity);
+            }).length;
+    }
+
+    function renderBuilds(items) {
+        failureList.replaceChildren();
+
+        if (!items.length) {
+            setMessage(listMessage, "No failed builds found.");
+            return;
+        }
+
+        setMessage(listMessage, `${items.length} failed build(s) found.`);
+
+        items.forEach(item => {
+            const card = document.createElement("article");
+            card.className = "failure-card";
+
+            const header = document.createElement("div");
+            header.className = "failure-header";
+
+            const title = addTextElement(
+                header, "h3",
+                `${item.job_name} #${item.build_number}`
+            );
+
+            const status = addTextElement(
+                header, "span",
+                item.analysis_status || "UNKNOWN",
+                badgeClass(item.analysis_status)
+            );
+
+            card.appendChild(header);
+
+            const details = document.createElement("p");
+            details.className = "details";
+            details.textContent =
+                `Event: ${item.event_key} · Build status: ${item.status} · ` +
+                `Created: ${item.created_at || "Unknown"}`;
+            card.appendChild(details);
+
+            let analysis = item.analysis_result;
+            if (typeof analysis === "string") {
+                try { analysis = JSON.parse(analysis); }
+                catch { analysis = null; }
+            }
+
+            if (analysis) {
+                const diagnosis = document.createElement("p");
+                diagnosis.textContent =
+                    `Root cause: ${analysis.root_cause || "Unavailable"}`;
+                card.appendChild(diagnosis);
+
+                const severity = addTextElement(
+                    card, "span",
+                    `Severity: ${analysis.severity || "UNKNOWN"}`,
+                    badgeClass(analysis.severity)
+                );
+                severity.style.marginRight = "8px";
+            } else {
+                addTextElement(
+                    card, "p",
+                    item.error_message
+                        ? `Error: ${item.error_message}`
+                        : "Diagnosis is pending or unavailable.",
+                    "muted"
+                );
+            }
+
+            const actions = document.createElement("div");
+            actions.className = "actions";
+
+            const view = document.createElement("button");
+            view.type = "button";
+            view.className = "primary";
+            view.textContent = "View diagnosis";
+            view.addEventListener("click", () => {
+                eventKeyInput.value = item.event_key;
+                loadAnalysis(item.event_key);
+                document.getElementById("analysis-detail")
+                    .scrollIntoView({ behavior: "smooth" });
+            });
+
+            actions.appendChild(view);
+
+            if (item.build_url) {
+                const link = document.createElement("a");
+                link.href = item.build_url;
+                link.target = "_blank";
+                link.rel = "noopener noreferrer";
+                link.className = "build-link";
+                link.textContent = "Open Jenkins build";
+                actions.appendChild(link);
+            }
+
+            card.appendChild(actions);
+            failureList.appendChild(card);
+        });
+    }
+
+    async function loadBuilds() {
+        refreshButton.disabled = true;
+        setMessage(listMessage, "Loading builds...");
+
+        try {
+            const response = await fetch("/analyses");
+            const data = await response.json();
+
+            if (!response.ok) {
+                throw new Error(data.detail || "Failed to load builds");
+            }
+
+            builds = Array.isArray(data.analyses) ? data.analyses : [];
+            updateSummary(builds);
+            renderBuilds(builds);
+        } catch (error) {
+            setMessage(listMessage, error.message, "error");
+        } finally {
+            refreshButton.disabled = false;
+        }
+    }
+
+    function displayAnalysis(data) {
+        document.getElementById("detail-title").textContent =
+            `${data.job_name} #${data.build_number}`;
+
+        const status = document.getElementById("analysis-status");
+        status.textContent = data.analysis_status || "UNKNOWN";
+        status.className = badgeClass(data.analysis_status);
+
+        const buildLink = document.getElementById("build-url");
+        buildLink.textContent = data.build_url || "Unavailable";
+        if (data.build_url) {
+            buildLink.href = data.build_url;
+            buildLink.hidden = false;
+        } else {
+            buildLink.removeAttribute("href");
+            buildLink.hidden = true;
+        }
+
+        document.getElementById("repository").textContent =
+            data.repository || "Unavailable";
+        document.getElementById("pr-number").textContent =
+            data.pr_number ?? "—";
+        document.getElementById("created-at").textContent =
+            data.created_at || "—";
+
+        let analysis = data.analysis_result;
+        if (typeof analysis === "string") {
+            try { analysis = JSON.parse(analysis); }
+            catch { analysis = null; }
+        }
+
+        document.getElementById("analysis-error-box").hidden =
+            !data.error_message;
+
+        document.getElementById("analysis-error").textContent =
+            data.error_message || "";
+
+        document.getElementById("diagnosis-content").hidden = !analysis;
+
+        if (!analysis) {
+            setMessage(
+                message,
+                data.analysis_status === "PROCESSING" ||
+                data.analysis_status === "RECEIVED"
+                    ? "Analysis is still in progress. Refresh in a moment."
+                    : "No completed diagnosis is available for this build.",
+                "muted"
+            );
+            return;
+        }
+
+        document.getElementById("severity").textContent =
+            analysis.severity || "UNKNOWN";
+        document.getElementById("severity").className =
+            badgeClass(analysis.severity);
+
+        document.getElementById("confidence").textContent =
+            analysis.confidence || "—";
+        document.getElementById("root-cause").textContent =
+            analysis.root_cause || "Not provided";
+        document.getElementById("recommended-fix").textContent =
+            analysis.recommended_fix || "Not provided";
+
+        const evidenceList = document.getElementById("evidence");
+        evidenceList.replaceChildren();
+
+        (Array.isArray(analysis.evidence) ? analysis.evidence : [])
+            .forEach(item => addTextElement(evidenceList, "li", item));
+
+        if (!evidenceList.children.length) {
+            addTextElement(evidenceList, "li", "No evidence provided.");
+        }
+
+        setMessage(message, "Diagnosis loaded successfully.", "success");
+    }
+
+    async function loadAnalysis(key) {
+        if (!key) return;
+
+        viewButton.disabled = true;
+        result.hidden = true;
+        setMessage(message, "Loading analysis...");
+
+        try {
+            const response = await fetch(
+                `/analyses/${encodeURIComponent(key)}`
+            );
+            const data = await response.json();
+
+            if (!response.ok) {
+                throw new Error(data.detail || "Could not fetch analysis");
+            }
+
+            result.hidden = false;
+            displayAnalysis(data);
+        } catch (error) {
+            setMessage(message, error.message, "error");
+        } finally {
+            viewButton.disabled = false;
+        }
+    }
+
+    form.addEventListener("submit", event => {
+        event.preventDefault();
+        loadAnalysis(eventKeyInput.value.trim());
+    });
+
+    refreshButton.addEventListener("click", loadBuilds);
+
+    loadBuilds();
+</script>
+</body>
+</html>
